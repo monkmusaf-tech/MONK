@@ -1,50 +1,51 @@
 from telegram import Update
 from telegram.ext import ContextTypes
-from database.queries import get_player, create_player, get_setting
-from utils.helpers import main_menu_keyboard, send_with_photo, update_survival_stats, format_number, rarity_badge
+from database.queries import (
+    get_player, create_player, get_setting, 
+    add_coins, add_inventory, give_weapon, add_log
+)
+from utils.helpers import (
+    main_menu_keyboard, send_with_photo, 
+    update_survival_stats, format_number, rarity_badge
+)
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     
-    # Create or get player
+    # 1. Check if player exists
     player = await get_player(user.id)
+    
     if not player:
-        player = await create_player(user.id, user.username or "", user.first_name)
-        is_new = True
-    else:
-        await update_survival_stats(user.id)
-        is_new = False
-    
-    welcome = await get_setting("welcome_message") or "Selamat datang di HuntGame!"
-    
-    if is_new:
+        # 2. Register New Player
+        player = await create_player(user.id, user.username or f"user_{user.id}", user.first_name)
+        
+        # 3. Give Starter Bonus (Menggunakan fungsi dari queries.py)
+        await add_coins(user.id, 500)
+        await give_weapon(user.id, "slingshot", "Ketapel")
+        await add_inventory(user.id, "food", "grilled_meat", "Daging Panggang", 5)
+        await add_log(user.id, "register", "Player baru bergabung")
+        
+        welcome_msg = await get_setting("welcome_message") or "Selamat datang di HuntGame!"
         text = (
             f"🎉 <b>Selamat Datang, {user.first_name}!</b>\n\n"
-            f"{welcome}\n\n"
+            f"{welcome_msg}\n\n"
             f"🎁 <b>Bonus Pemula:</b>\n"
             f"• 💰 500 Koin\n"
             f"• 🪃 Ketapel (gratis)\n"
-            f"• 🍖 5x Daging Kelinci\n\n"
+            f"• 🍖 5x Daging Panggang\n\n"
             f"Selamat berburu, Pemburu! 🦌"
         )
-        # Give starter bonus
-        from database.queries import add_coins, add_inventory
-        from database.db import get_db
-        await add_coins(user.id, 500)
-        async with await get_db() as db:
-            await db.execute(
-                "INSERT OR IGNORE INTO player_weapons (user_id, weapon_id, weapon_name) VALUES (?,?,?)",
-                (user.id, "slingshot", "Ketapel")
-            )
-            await db.commit()
-        await add_inventory(user.id, "food", "grilled_meat", "Daging Panggang", 5)
     else:
+        # 4. Existing Player
+        await update_survival_stats(user.id)
+        # Ambil data terbaru setelah update stats
         player = await get_player(user.id)
+        
         text = (
             f"🦌 <b>Selamat Datang Kembali, {user.first_name}!</b>\n\n"
             f"💰 Koin: <b>{format_number(player['coins'])}</b>\n"
             f"⭐ Level: <b>{player['level']}</b>\n"
-            f"🎯 Total Hunt: <b>{format_number(player['total_hunts'])}</b>\n\n"
+            f"🎯 Total Hunt: <b>{format_number(player.get('total_hunts', 0))}</b>\n\n"
             f"Pilih menu di bawah:"
         )
     
@@ -60,8 +61,9 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     user = update.effective_user
     player = await get_player(user.id)
+    
     if not player:
-        player = await create_player(user.id, user.username or "", user.first_name)
+        player = await create_player(user.id, user.username or f"user_{user.id}", user.first_name)
     
     await update_survival_stats(user.id)
     player = await get_player(user.id)
@@ -77,6 +79,7 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await query.edit_message_text(text=text, reply_markup=main_menu_keyboard(), parse_mode="HTML")
     except Exception:
+        # Jika pesan tidak bisa diedit (misal ada foto), kirim pesan baru
         await query.message.reply_text(text=text, reply_markup=main_menu_keyboard(), parse_mode="HTML")
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
