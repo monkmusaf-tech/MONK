@@ -15,20 +15,18 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# --- HELPER FUNCTIONS ---
 async def handle_noop(update, context):
-    """Handle noop callbacks silently"""
     if update.callback_query:
         await update.callback_query.answer()
 
 async def handle_lb(update, context):
-    """Handle leaderboard callbacks"""
     query = update.callback_query
     await query.answer()
     lb_type = query.data.replace("lb_", "")
     await leaderboard.show_leaderboard(update, context, lb_type)
 
 async def handle_player_detail(update, context):
-    """Handle player detail from admin"""
     query = update.callback_query
     await query.answer()
     player_id = int(query.data.replace("player_detail_", ""))
@@ -63,14 +61,11 @@ async def handle_upgrade_home_confirm(update, context):
     await home.upgrade_home(update, context)
 
 async def handle_spawn_select(update, context):
-    """Handle boss spawn selection"""
     query = update.callback_query
     await query.answer()
     animal_id = query.data.replace("spawn_select_", "")
-    
     context.user_data['admin_action'] = 'spawn_boss'
     context.user_data['spawn_animal'] = animal_id
-    
     await query.edit_message_text(
         f"👹 <b>Spawn Boss: {animal_id}</b>\n\n"
         f"Kirim format:\n<code>map_id|hp|reward_koin</code>\n\n"
@@ -80,63 +75,45 @@ async def handle_spawn_select(update, context):
     )
 
 async def handle_topup_select(update, context):
-    """Handle topup package selection"""
     query = update.callback_query
     await query.answer()
     pkg_id = query.data.replace("topup_select_", "")
-    
     from database.queries import get_topup_packages, get_setting
     packages = await get_topup_packages()
     pkg = next((p for p in packages if p['id'] == pkg_id), None)
-    
     if not pkg:
         await query.answer("❌ Paket tidak ditemukan!", show_alert=True)
         return
-    
     from utils.helpers import format_number
     actual_coins = int(pkg['coins'] * (1 + pkg['bonus_percent'] / 100))
     payment_info = await get_setting("payment_info") or "Hubungi admin"
-    
     context.user_data['topup_pkg_id'] = pkg_id
     context.user_data['topup_amount'] = pkg['price']
     context.user_data['waiting_for'] = 'topup_proof'
-    
     await query.edit_message_text(
         f"💎 <b>Top-Up: {pkg['name']}</b>\n\n"
         f"💰 Koin: {format_number(actual_coins)}\n"
         f"💵 Harga: Rp {format_number(pkg['price'])}\n\n"
         f"📋 <b>Cara Bayar:</b>\n{payment_info}\n\n"
-        f"📸 Setelah transfer, kirim foto bukti bayar ke bot ini!\n"
-        f"Bot akan otomatis meneruskan ke admin.",
+        f"📸 Setelah transfer, kirim foto bukti bayar ke bot ini!\n",
         parse_mode="HTML",
         reply_markup=None
     )
 
 async def handle_proof_photo(update, context):
-    """Handle payment proof photo from players"""
     user = update.effective_user
-    
     if context.user_data.get('waiting_for') == 'topup_proof':
         photo = update.message.photo[-1]
         pkg_id = context.user_data.get('topup_pkg_id')
         amount = context.user_data.get('topup_amount', 0)
-        
         from database.queries import get_topup_packages, create_transaction, get_player, create_player
         player = await get_player(user.id)
         if not player:
             player = await create_player(user.id, user.username or "", user.first_name)
-        
         packages = await get_topup_packages()
         pkg = next((p for p in packages if p['id'] == pkg_id), None)
         pkg_name = pkg['name'] if pkg else pkg_id
-        
-        txn_id = await create_transaction(
-            user.id, 'topup', amount,
-            f"Top-Up {pkg_name}",
-            photo.file_id
-        )
-        
-        # Notify admins
+        txn_id = await create_transaction(user.id, 'topup', amount, f"Top-Up {pkg_name}", photo.file_id)
         bot = context.bot
         name = user.username or user.first_name
         for admin_id in ADMIN_IDS:
@@ -154,44 +131,36 @@ async def handle_proof_photo(update, context):
                     ),
                     parse_mode="HTML"
                 )
-            except Exception:
-                pass
-        
+            except Exception: pass
         context.user_data.pop('waiting_for', None)
-        context.user_data.pop('topup_pkg_id', None)
-        context.user_data.pop('topup_amount', None)
-        
-        await update.message.reply_text(
-            f"✅ <b>Bukti Diterima!</b>\n\n"
-            f"ID Transaksi: <b>#{txn_id}</b>\n"
-            f"Admin akan memverifikasi dalam 1x24 jam.\n\n"
-            f"Terima kasih! 🦌",
-            parse_mode="HTML"
-        )
+        await update.message.reply_text(f"✅ <b>Bukti Diterima!</b>\nID: <b>#{txn_id}</b>", parse_mode="HTML")
         return
-    
-    # Pass to admin photo handler
     if user.id in ADMIN_IDS:
         await manage_content.handle_photo_upload(update, context)
 
 def from_utils_format(n):
     return f"{int(n):,}".replace(",", ".")
 
-async def main():
+# --- ASYNC DATABASE INIT ---
+async def post_init(application: Application):
+    """Inisialisasi database saat bot start"""
     await init_db()
+    logger.info("✅ Database initialized via post_init!")
+
+# --- MAIN RUNNER ---
+def main():
+    # Bangun application dengan post_init hook
+    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
     
-    app = Application.builder().token(BOT_TOKEN).build()
-    
-    # ── USER COMMANDS ──────────────────────────────────────────
+    # ── HANDLERS ───────────────────────────────────────────────
     app.add_handler(CommandHandler("start", start.cmd_start))
     app.add_handler(CommandHandler("help", start.cmd_help))
     app.add_handler(CommandHandler("admin", dashboard.admin_panel))
     
-    # ── MAIN MENU ──────────────────────────────────────────────
     app.add_handler(CallbackQueryHandler(start.main_menu, pattern="^main_menu$"))
     app.add_handler(CallbackQueryHandler(handle_noop, pattern="^noop$"))
     
-    # ── HUNT ───────────────────────────────────────────────────
+    # HUNT
     app.add_handler(CallbackQueryHandler(hunt.menu_hunt, pattern="^menu_hunt$"))
     app.add_handler(CallbackQueryHandler(hunt.select_map, pattern="^map_[^_]+$"))
     app.add_handler(CallbackQueryHandler(hunt.select_animal, pattern="^hunt_animal_"))
@@ -199,7 +168,7 @@ async def main():
     app.add_handler(CallbackQueryHandler(hunt.filter_rarity, pattern="^filter_rarity_"))
     app.add_handler(CallbackQueryHandler(hunt.search_animal, pattern="^search_animal$"))
     
-    # ── MARKET ─────────────────────────────────────────────────
+    # MARKET
     app.add_handler(CallbackQueryHandler(market.menu_market, pattern="^menu_market$"))
     app.add_handler(CallbackQueryHandler(market.sell_inventory, pattern="^market_sell$"))
     app.add_handler(CallbackQueryHandler(market.sell_item, pattern="^sell_item_"))
@@ -212,7 +181,7 @@ async def main():
     app.add_handler(CallbackQueryHandler(market.menu_topup, pattern="^market_topup$"))
     app.add_handler(CallbackQueryHandler(handle_topup_select, pattern="^topup_select_"))
     
-    # ── HOME ───────────────────────────────────────────────────
+    # HOME
     app.add_handler(CallbackQueryHandler(home.menu_home, pattern="^menu_home$"))
     app.add_handler(CallbackQueryHandler(handle_home_eat, pattern="^home_eat$"))
     app.add_handler(CallbackQueryHandler(handle_home_drink, pattern="^home_drink$"))
@@ -225,14 +194,12 @@ async def main():
     app.add_handler(CallbackQueryHandler(home.upgrade_home, pattern="^upgrade_home$"))
     app.add_handler(CallbackQueryHandler(handle_upgrade_home_confirm, pattern="^upgrade_home_confirm$"))
     
-    # ── MUSEUM ─────────────────────────────────────────────────
+    # MUSEUM, WEAPONS, PROFILE, LEADERBOARD
     app.add_handler(CallbackQueryHandler(museum.menu_museum, pattern="^menu_museum$"))
     app.add_handler(CallbackQueryHandler(museum.view_trophies, pattern="^museum_trophies$"))
     app.add_handler(CallbackQueryHandler(museum.add_trophy, pattern="^add_trophy_"))
     app.add_handler(CallbackQueryHandler(museum.museum_leaderboard, pattern="^museum_lb$"))
     app.add_handler(CallbackQueryHandler(museum.achievements, pattern="^achievements$"))
-    
-    # ── WEAPONS & INVENTORY ────────────────────────────────────
     app.add_handler(CallbackQueryHandler(weapons.menu_weapons, pattern="^menu_weapons$"))
     app.add_handler(CallbackQueryHandler(weapons.buy_weapon, pattern="^buy_weapon_"))
     app.add_handler(CallbackQueryHandler(weapons.equip_weapon, pattern="^equip_weapon_"))
@@ -240,13 +207,11 @@ async def main():
     app.add_handler(CallbackQueryHandler(inventory.view_items, pattern="^inv_items$"))
     app.add_handler(CallbackQueryHandler(inventory.view_animals, pattern="^inv_animals$"))
     app.add_handler(CallbackQueryHandler(inventory.use_item, pattern="^use_item_"))
-    
-    # ── PROFILE & LEADERBOARD ──────────────────────────────────
     app.add_handler(CallbackQueryHandler(profile.menu_profile, pattern="^menu_profile$"))
     app.add_handler(CallbackQueryHandler(leaderboard.menu_leaderboard, pattern="^menu_leaderboard$"))
     app.add_handler(CallbackQueryHandler(handle_lb, pattern="^lb_"))
     
-    # ── ADMIN PANEL ────────────────────────────────────────────
+    # ADMIN SYSTEM
     app.add_handler(CallbackQueryHandler(dashboard.admin_dashboard, pattern="^admin_dashboard$"))
     app.add_handler(CallbackQueryHandler(manage_content.menu, pattern="^admin_content$"))
     app.add_handler(CallbackQueryHandler(economy.menu, pattern="^admin_economy$"))
@@ -257,7 +222,7 @@ async def main():
     app.add_handler(CallbackQueryHandler(logs.menu, pattern="^admin_logs$"))
     app.add_handler(CallbackQueryHandler(roles.menu, pattern="^admin_roles$"))
     
-    # ── ADMIN CONTENT ──────────────────────────────────────────
+    # ADMIN ACTIONS
     app.add_handler(CallbackQueryHandler(manage_content.manage_animals, pattern="^content_animals$"))
     app.add_handler(CallbackQueryHandler(manage_content.add_animal, pattern="^add_animal$"))
     app.add_handler(CallbackQueryHandler(manage_content.edit_animal, pattern="^edit_animal_"))
@@ -270,15 +235,11 @@ async def main():
     app.add_handler(CallbackQueryHandler(manage_content.toggle_map, pattern="^toggle_map_"))
     app.add_handler(CallbackQueryHandler(manage_content.manage_homes, pattern="^content_homes$"))
     app.add_handler(CallbackQueryHandler(manage_content.manage_museum, pattern="^content_museum$"))
-    
-    # ── ADMIN ECONOMY ──────────────────────────────────────────
     app.add_handler(CallbackQueryHandler(economy.set_prices, pattern="^eco_prices$"))
     app.add_handler(CallbackQueryHandler(economy.topup_packages, pattern="^eco_topup$"))
     app.add_handler(CallbackQueryHandler(economy.rarity_multiplier, pattern="^eco_rarity$"))
     app.add_handler(CallbackQueryHandler(economy.toggle_event, pattern="^eco_event_"))
     app.add_handler(CallbackQueryHandler(economy.set_payment_info, pattern="^eco_payment$"))
-    
-    # ── ADMIN PLAYERS ──────────────────────────────────────────
     app.add_handler(CallbackQueryHandler(players.search_player, pattern="^player_search$"))
     app.add_handler(CallbackQueryHandler(handle_player_detail, pattern="^player_detail_"))
     app.add_handler(CallbackQueryHandler(players.give_coins, pattern="^player_give_coin_"))
@@ -288,34 +249,24 @@ async def main():
     app.add_handler(CallbackQueryHandler(players.set_level, pattern="^player_level_"))
     app.add_handler(CallbackQueryHandler(players.ban_player, pattern="^player_ban_"))
     app.add_handler(CallbackQueryHandler(players.broadcast, pattern="^player_broadcast$"))
-    
-    # ── ADMIN EVENTS ───────────────────────────────────────────
     app.add_handler(CallbackQueryHandler(events.spawn_boss_menu, pattern="^event_boss$"))
     app.add_handler(CallbackQueryHandler(events.active_bosses, pattern="^event_active$"))
     app.add_handler(CallbackQueryHandler(events.create_event, pattern="^event_create$"))
     app.add_handler(CallbackQueryHandler(handle_spawn_select, pattern="^spawn_select_"))
-    
-    # ── ADMIN TRANSACTIONS ─────────────────────────────────────
     app.add_handler(CallbackQueryHandler(transactions.verify_topup, pattern="^txn_verify$"))
     app.add_handler(CallbackQueryHandler(transactions.approve_topup, pattern="^approve_txn_"))
     app.add_handler(CallbackQueryHandler(transactions.reject_topup, pattern="^reject_txn_"))
     app.add_handler(CallbackQueryHandler(transactions.history, pattern="^txn_history$"))
     app.add_handler(CallbackQueryHandler(transactions.export_csv, pattern="^txn_export$"))
-    
-    # ── ADMIN SETTINGS ─────────────────────────────────────────
     app.add_handler(CallbackQueryHandler(bot_settings.set_photo, pattern="^setting_photos$"))
     app.add_handler(CallbackQueryHandler(bot_settings.set_photo, pattern="^setting_photo_"))
     app.add_handler(CallbackQueryHandler(bot_settings.game_params, pattern="^setting_params$"))
     app.add_handler(CallbackQueryHandler(bot_settings.toggle_feature, pattern="^setting_toggles$"))
     app.add_handler(CallbackQueryHandler(bot_settings.toggle_feature, pattern="^setting_toggle_"))
-    
-    # ── ADMIN LOGS ─────────────────────────────────────────────
     app.add_handler(CallbackQueryHandler(logs.realtime_log, pattern="^log_realtime$"))
     app.add_handler(CallbackQueryHandler(logs.realtime_log, pattern="^log_critical$"))
     app.add_handler(CallbackQueryHandler(logs.realtime_log, pattern="^log_warning$"))
     app.add_handler(CallbackQueryHandler(logs.cheat_detection, pattern="^log_cheat$"))
-    
-    # ── ADMIN ROLES ────────────────────────────────────────────
     app.add_handler(CallbackQueryHandler(roles.add_admin, pattern="^role_add$"))
     app.add_handler(CallbackQueryHandler(roles.edit_role, pattern="^role_list_edit$"))
     app.add_handler(CallbackQueryHandler(roles.edit_role, pattern="^role_edit_"))
@@ -323,15 +274,15 @@ async def main():
     app.add_handler(CallbackQueryHandler(roles.remove_admin, pattern="^role_remove_"))
     app.add_handler(CallbackQueryHandler(roles.set_role_handler, pattern="^set_role_"))
     
-    # ── PHOTO HANDLER ──────────────────────────────────────────
+    # PHOTO & TEXT
     app.add_handler(MessageHandler(filters.PHOTO, handle_proof_photo))
-    
-    # ── UNIVERSAL TEXT HANDLER (must be last) ──────────────────
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, universal_text_handler))
     
     logger.info("🦌 HuntGame Bot starting...")
     print("🦌 HuntGame Bot is running!")
-    await app.run_polling(allowed_updates=["message", "callback_query"])
+    
+    # JALANKAN POLLING
+    app.run_polling(allowed_updates=["message", "callback_query"])
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
