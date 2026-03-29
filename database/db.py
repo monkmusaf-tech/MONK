@@ -305,15 +305,15 @@ async def seed_default_data(db):
     
     # === MAPS ===
     maps = [
-        ("forest", "Hutan Rimba", "🌲", "Hutan lebat penuh hewan liar", 1),
-        ("savanna", "Padang Savanna", "🌾", "Padang rumput luas, hewan langka", 5),
-        ("mountain", "Pegunungan", "⛰️", "Puncak berbahaya, hewan epic", 10),
-        ("swamp", "Rawa Gelap", "🌿", "Rawa misterius penuh bahaya", 15),
-        ("volcano", "Gunung Berapi", "🌋", "Area ekstrem, hewan mythic", 25),
-        ("ocean_coast", "Pantai Samudera", "🌊", "Tepi laut, hewan laut langka", 20),
+        ("forest",      "Hutan Rimba",      "🌲", "Hutan lebat penuh hewan liar",       1,  1),
+        ("savanna",     "Padang Savanna",   "🌾", "Padang rumput luas, hewan langka",    5,  1),
+        ("mountain",    "Pegunungan",       "⛰️", "Puncak berbahaya, hewan epic",        10, 1),
+        ("swamp",       "Rawa Gelap",       "🌿", "Rawa misterius penuh bahaya",         15, 1),
+        ("volcano",     "Gunung Berapi",    "🌋", "Area ekstrem, hewan mythic",          25, 1),
+        ("ocean_coast", "Pantai Samudera",  "🌊", "Tepi laut, hewan laut langka",        20, 1),
     ]
     await db.executemany(
-        "INSERT OR IGNORE INTO maps VALUES (?,?,?,?,?)",
+        "INSERT OR IGNORE INTO maps VALUES (?,?,?,?,?,?)",
         maps
     )
     
