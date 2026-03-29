@@ -1,0 +1,1 @@
+from handlers.weapons_inventory_profile import menu_profile
