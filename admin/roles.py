@@ -4,7 +4,7 @@ from telegram.ext import ContextTypes
 from database.queries import get_all_admins, get_admin_role, add_log
 from database.db import get_db
 from config.settings import ADMIN_IDS
-from utils.helpers import is_admin, format_number
+from utils.helpers import is_admin
 
 ROLE_TYPES = {
     "super_admin": "👑 Super Admin",
@@ -25,7 +25,8 @@ ROLE_PERMISSIONS = {
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    if not await is_admin(query.from_user.id): return
+    if not await is_admin(query.from_user.id):
+        return
 
     admins = await get_all_admins()
     text = (
@@ -36,8 +37,10 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     for admin in admins:
+        uid = admin['user_id']
+        uname = admin.get('username') or f"ID:{uid}"
         role_label = ROLE_TYPES.get(admin['role'], admin['role'])
-        text += f"• {admin.get('username', f'ID:{admin[\"user_id\"]}')} — {role_label}\n"
+        text += f"• {uname} — {role_label}\n"
 
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("➕ Tambah Sub-Admin", callback_data="role_add")],
@@ -51,7 +54,8 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def add_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    if not await is_admin(query.from_user.id): return
+    if not await is_admin(query.from_user.id):
+        return
 
     context.user_data['admin_action'] = 'add_admin'
     await query.edit_message_text(
@@ -61,31 +65,37 @@ async def add_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Role tersedia:\n"
         "• super_admin - Semua akses\n"
         "• content - Kelola konten\n"
-        "• finance - Keuangan & topup\n"
+        "• finance - Keuangan dan topup\n"
         "• moderator - Kelola player\n"
         "• cs - Customer service\n\n"
         "Contoh:\n"
         "<code>123456789|moderator</code>",
         parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Batal", callback_data="admin_roles")]])
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("❌ Batal", callback_data="admin_roles")
+        ]])
     )
 
 async def edit_role(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    if not await is_admin(query.from_user.id): return
+    if not await is_admin(query.from_user.id):
+        return
 
     if query.data == "role_list_edit":
         admins = await get_all_admins()
         if not admins:
-            await query.answer("Tidak ada sub-admin!", show_alert=True); return
+            await query.answer("Tidak ada sub-admin!", show_alert=True)
+            return
 
         text = "✏️ <b>Edit Role Sub-Admin</b>\n\nPilih admin:"
         buttons = []
         for admin in admins:
+            uid = admin['user_id']
+            uname = admin.get('username') or f"ID:{uid}"
             buttons.append([InlineKeyboardButton(
-                f"{admin.get('username', f'ID:{admin[\"user_id\"]}')} — {admin['role']}",
-                callback_data=f"role_edit_{admin['user_id']}"
+                f"{uname} — {admin['role']}",
+                callback_data=f"role_edit_{uid}"
             )])
         buttons.append([InlineKeyboardButton("◀️ Kembali", callback_data="admin_roles")])
         await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(buttons))
@@ -93,35 +103,38 @@ async def edit_role(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     admin_id = int(query.data.replace("role_edit_", ""))
     role_data = await get_admin_role(admin_id)
+    current_role = role_data['role'] if role_data else '-'
 
-    text = f"✏️ Edit Role Admin ID: {admin_id}\nRole saat ini: {role_data['role'] if role_data else '-'}\n\nPilih role baru:"
+    text = f"✏️ Edit Role Admin ID: {admin_id}\nRole saat ini: {current_role}\n\nPilih role baru:"
     buttons = []
-
     for role_key, role_label in ROLE_TYPES.items():
         buttons.append([InlineKeyboardButton(
             role_label,
             callback_data=f"set_role_{admin_id}_{role_key}"
         )])
-
     buttons.append([InlineKeyboardButton("◀️ Kembali", callback_data="admin_roles")])
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(buttons))
 
 async def remove_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    if not await is_admin(query.from_user.id): return
+    if not await is_admin(query.from_user.id):
+        return
 
     if query.data == "role_list_remove":
         admins = await get_all_admins()
         if not admins:
-            await query.answer("Tidak ada sub-admin!", show_alert=True); return
+            await query.answer("Tidak ada sub-admin!", show_alert=True)
+            return
 
         text = "🗑️ <b>Hapus Sub-Admin</b>\n\nPilih admin yang mau dihapus:"
         buttons = []
         for admin in admins:
+            uid = admin['user_id']
+            uname = admin.get('username') or f"ID:{uid}"
             buttons.append([InlineKeyboardButton(
-                f"🗑️ {admin.get('username', f'ID:{admin[\"user_id\"]}')}",
-                callback_data=f"role_remove_{admin['user_id']}"
+                f"🗑️ {uname}",
+                callback_data=f"role_remove_{uid}"
             )])
         buttons.append([InlineKeyboardButton("◀️ Kembali", callback_data="admin_roles")])
         await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(buttons))
@@ -137,13 +150,17 @@ async def remove_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await menu(update, context)
 
 async def set_role_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle set_role_{admin_id}_{role} callback"""
     query = update.callback_query
     await query.answer()
-    if not await is_admin(query.from_user.id): return
+    if not await is_admin(query.from_user.id):
+        return
 
-    parts = query.data.replace("set_role_", "").split("_", 1)
-    if len(parts) < 2: return
+    # format: set_role_{admin_id}_{role}
+    raw = query.data.replace("set_role_", "")
+    # role bisa mengandung underscore, jadi split dari kiri 1x
+    parts = raw.split("_", 1)
+    if len(parts) < 2:
+        return
 
     admin_id = int(parts[0])
     new_role = parts[1]
